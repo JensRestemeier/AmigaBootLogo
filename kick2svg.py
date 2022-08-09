@@ -1,10 +1,11 @@
-import base64, io, struct
+import base64, io, struct, argparse
 from PIL import Image, ImageDraw
 import xml.etree.ElementTree as ET
 
 class Convert:
     def __init__(self):
         self.colname = {}
+        self.pal = []
 
     def polygon(self, g, polygon, col):
         if len(polygon) == 2:
@@ -22,39 +23,33 @@ class Convert:
         # While it would probably be possible to translate flood fills into a filled polygon by searching edges I don't think the effort is really worth it... The edge cases alone would probably drive someone insane.
         circle = ET.SubElement(g, "circle", cx=str(x), cy=str(y), r="0.5", fill=self.colname[col], stroke="none")
 
-    def render(self):
-        if True:
-            with open("Kickstart-v1.3-rev34.5-1987-Commodore-A500-A1000-A2000-CDTV.rom", "rb") as f:
-                data = f.read()
-        else:
-            with open("kick-patch.bin", "rb") as f:
-                data = f.read()
+    def load(self, path):
+        with open(path, "rb") as f:
+            data = f.read()
 
         # grab palette
         palette = data[0x2872A:0x2872A+8]
-        pal = []
+        self.pal = []
         for i in range(4):
             r = palette[i*2+0] & 0xF
             g = (palette[i*2+1] & 0xF0) >> 4
             b = palette[i*2+1] & 0xF
             a = 1 if i > 0 else 0
 
-            pal.extend([r+r*16, g+g*16, b+b*16,a*254])
-
-        self.colname = {}
-        for i in range(4):
-            self.colname[i] = "#%02.2x%02.2x%02.2x" % (pal[i*4+0], pal[i*4+1], pal[i*4+2])
+            self.pal.extend([r+r*16, g+g*16, b+b*16,a*254])
 
         # grab vector data
-        vectors = data[0x289d0:0x28b6c]
+        self.vectors = data[0x289d0:0x28b6c]
 
         # grab bitmap data
-        images = data[0x28B6C:0x28C9C+6]
+        self.images = data[0x28B6C:0x28C9C+6]
 
+        # print (len(vectors), len(images))
+
+    def save_png(self, path):
         # Export as bitmap:
-        # print (" ".join(["%2.2x" % x for x in logo]))
         image = Image.new("P", (320, 200))
-        image.putpalette(pal, "RGBX")
+        image.putpalette(self.pal, "RGBX")
         draw = ImageDraw.Draw(image)
 
         ox = 70
@@ -63,9 +58,8 @@ class Convert:
         cmd = 0
         col = 0
         polygon = []
-        for i in range(len(vectors)//2):
-            a,b = vectors[i*2],vectors[i*2+1]
-            # print ("%2.2x %2.2x" % (a,b))
+        for i in range(len(self.vectors)//2):
+            a,b = self.vectors[i*2],self.vectors[i*2+1]
             if (a,b) == (0xFF,0xFF):
                 break
             elif a == 0xFF or a == 0xFE:
@@ -86,18 +80,18 @@ class Convert:
                 draw.line(polygon[i:i+2], fill=col)
 
         i = 0
-        while i < len(images):
-            a,w,h,x,y = struct.unpack_from(">hBBBB", images, i)
+        while i < len(self.images):
+            a,w,h,x,y = struct.unpack_from(">hBBBB", self.images, i)
             if a < 0:
                 break
             i += 6
 
             bm = Image.new("P", (w*16,h))
-            bm.putpalette(pal, "RGBA")
+            bm.putpalette(self.pal, "RGBA")
 
             for r in range(h):
                 for c in range(w):
-                    val, = struct.unpack_from(">H", images, i + r*w*2 + c*2)
+                    val, = struct.unpack_from(">H", self.images, i + r*w*2 + c*2)
                     for v in range(16):
                         if val & 0x8000 != 0:
                             bm.putpixel((c*16+v,r), a)
@@ -106,7 +100,13 @@ class Convert:
 
             i += w*h*2
 
-        image.save("logo.png")
+        image.save(path)
+
+    def save_svg(self, path):
+        # create lookup from pen index to colour:
+        self.colname = {}
+        for i in range(4):
+            self.colname[i] = "#%02.2x%02.2x%02.2x" % (self.pal[i*4+0], self.pal[i*4+1], self.pal[i*4+2])
 
         # export as SVG:
         svg = ET.Element("svg", {
@@ -119,12 +119,17 @@ class Convert:
             "xmlns:svg":"http://www.w3.org/2000/svg",
         })
         g_main = ET.SubElement(svg, "g", style="image-rendering:pixelated")
+
+        ox = 70
+        oy = 40
+
         g = ET.SubElement(g_main, "g", transform="translate(%i,%i)" % (ox,oy))
+
         cmd = 0
         col = 0
         polygon = []
-        for i in range(len(vectors)//2):
-            a,b = vectors[i*2],vectors[i*2+1]
+        for i in range(len(self.vectors)//2):
+            a,b = self.vectors[i*2],self.vectors[i*2+1]
             # print ("%2.2x %2.2x" % (a,b))
             if (a,b) == (0xFF,0xFF):
                 break
@@ -143,18 +148,18 @@ class Convert:
                     self.fill(g, (a,b), col)
 
         i = 0
-        while i < len(images):
-            a,w,h,x,y = struct.unpack_from(">hBBBB", images, i)
+        while i < len(self.images):
+            a,w,h,x,y = struct.unpack_from(">hBBBB", self.images, i)
             if a < 0:
                 break
             i += 6
 
             bm = Image.new("P", (w*16,h))
-            bm.putpalette(pal, "RGBA")
+            bm.putpalette(self.pal, "RGBA")
 
             for r in range(h):
                 for c in range(w):
-                    val, = struct.unpack_from(">H", images, i + r*w*2 + c*2)
+                    val, = struct.unpack_from(">H", self.images, i + r*w*2 + c*2)
                     for v in range(16):
                         if val & 0x8000 != 0:
                             bm.putpixel((c*16+v,r), a)
@@ -168,14 +173,26 @@ class Convert:
 
             i += w*h*2
 
-        with open("logo.svg", 'wb') as f:
+        with open(path, 'wb') as f:
             ET.ElementTree(svg).write(f, encoding='utf-8', xml_declaration=True)
 
-        print (len(vectors), len(images))
-
 def main():
-    convert = Convert()
-    convert.render()
+    parser = argparse.ArgumentParser(description='Extract Amiga boot logo from Kickstart 1.3 ROM')
+    parser.add_argument('kick', type=str, help='Kickstart ROM image')
+    parser.add_argument('--png',  type=str, help='output as PNG file')
+    parser.add_argument('--svg',  type=str, help='output as SVG file')
+
+    args = parser.parse_args()
+    if args.kick != None:
+        convert = Convert()
+        convert.load(args.kick)
+
+        if args.png != None:
+            convert.save_png(args.png)
+        if args.svg != None:
+            convert.save_svg(args.svg)
+        if args.png != None and args.svg != None:
+            convert.save_svg("logo.svg")
 
 if __name__ == "__main__":
     main()
