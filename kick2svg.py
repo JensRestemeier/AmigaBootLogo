@@ -108,6 +108,9 @@ class Convert:
         for i in range(4):
             self.colname[i] = "#%02.2x%02.2x%02.2x" % (self.pal[i*4+0], self.pal[i*4+1], self.pal[i*4+2])
 
+        ox = 70
+        oy = 40
+
         # export as SVG:
         svg = ET.Element("svg", {
             "width":"320",
@@ -118,12 +121,7 @@ class Convert:
             "xmlns:xlink":"http://www.w3.org/1999/xlink",
             "xmlns:svg":"http://www.w3.org/2000/svg",
         })
-        g_main = ET.SubElement(svg, "g", style="image-rendering:pixelated")
-
-        ox = 70
-        oy = 40
-
-        g = ET.SubElement(g_main, "g", transform="translate(%i,%i)" % (ox,oy))
+        g = ET.SubElement(svg, "g", style="image-rendering:pixelated", transform="translate(%i,%i)" % (ox,oy))
 
         cmd = 0
         col = 0
@@ -191,7 +189,7 @@ def main():
             convert.save_png(args.png)
         if args.svg != None:
             convert.save_svg(args.svg)
-        if args.png != None and args.svg != None:
+        if args.png == None and args.svg == None:
             convert.save_svg("logo.svg")
 
 if __name__ == "__main__":

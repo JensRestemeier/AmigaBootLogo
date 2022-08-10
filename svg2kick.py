@@ -1,4 +1,4 @@
-import base64, io, struct, math
+import base64, io, struct, math, argparse
 from re import S
 from PIL import Image, ImageDraw
 import xml.etree.ElementTree as ET
@@ -12,7 +12,6 @@ import xml.etree.ElementTree as ET
 def add(a, b):
     return (a[0]+b[0], a[1]+b[1])
    
-
 def add_cond(cond, a, b):
     if cond:
         return a
@@ -37,6 +36,22 @@ def project(v):
     p = clamp(v[0] - 70, 0, 253), clamp(v[1] - 40, 0, 255)
     return list(p)
 
+def remap_col(remap, col, used_cols, pal):
+    try:
+        return remap[col]
+    except KeyError:
+        bestIdx = -1
+        bestDiff = -1
+        for idx,val in enumerate(used_cols):
+            d = diff(col, val)
+            if bestIdx < 0 or d < bestDiff:
+                bestIdx = idx
+                bestDiff = d
+        idx = len(pal)
+        remap[col] = idx
+        pal.append(used_cols[bestIdx])
+        return idx
+
 class Convert:
     def __init__(self):
         # we render the temporary image to RGBA
@@ -59,7 +74,6 @@ class Convert:
         self.poly([(x,y), (x+w,y), (x+w,y+h), (x,y+h), (x,y)])
 
     def poly(self, p):
-        print (p)
         if self.fillColor != None:
             self.draw.polygon(p, outline=self.fillColor)
 
@@ -104,16 +118,18 @@ class Convert:
             self.ops.append(draw)
 
     def fill(self, c):
-        if c == "none":
-            self.fillColor = None
-        elif c[0] == "#":
-            self.fillColor = (int(c[1:3],16) & 0xF0,int(c[3:5],16) & 0xF0,int(c[5:7],16) & 0xF0)
+        if len(c) > 0:
+            if c == "none":
+                self.fillColor = None
+            elif c[0] == "#":
+                self.fillColor = (int(c[1:3],16) & 0xF0,int(c[3:5],16) & 0xF0,int(c[5:7],16) & 0xF0)
 
     def stroke(self, c):
-        if c == "none":
-            self.strokeColor = None
-        elif c[0] == "#":
-            self.strokeColor = (int(c[1:3],16) & 0xF0,int(c[3:5],16) & 0xF0,int(c[5:7],16) & 0xF0)
+        if len(c) > 0:
+            if c == "none":
+                self.strokeColor = None
+            elif c[0] == "#":
+                self.strokeColor = (int(c[1:3],16) & 0xF0,int(c[3:5],16) & 0xF0,int(c[5:7],16) & 0xF0)
 
     def style(self, s):
         for cmd in s.split(";"):
@@ -235,85 +251,82 @@ class Convert:
         else:
             print (cmd.tag)
 
-def remap_col(remap, col, used_cols, pal):
-    try:
-        return remap[col]
-    except KeyError:
-        bestIdx = -1
-        bestDiff = -1
-        for idx,val in enumerate(used_cols):
-            d = diff(col, val)
-            if bestIdx < 0 or d < bestDiff:
-                bestIdx = idx
-                bestDiff = d
-        idx = len(pal)
-        remap[col] = idx
-        pal.append(used_cols[bestIdx])
-        return idx
+    def process(self, path):
+        svg = ET.parse(path).getroot()
+        for cmd in svg:
+            self.render(cmd, (0,0))
+        im = self.im.convert("P", colors=4, dither=Image.Dither.NONE)
+        pal = im.getpalette()
+        used_cols = [(pal[x*3+0],pal[x*3+1],pal[x*3+2]) for x in set(im.getdata())]
+        remap = {}
+        self.out_pal = []
+        bg_col = remap_col(remap, self.im.getpixel((0,0)), used_cols, self.out_pal)
+        self.vectors = []
+        for op in self.ops:
+            self.vectors.extend([op[0], remap_col(remap, op[1], used_cols, self.out_pal)])
+            self.vectors.extend(op[2:])
+        self.vectors.extend([255,255])
+
+        self.images=[]
+        self.images.extend([255,255])
+
+        if len(self.vectors) > 412:
+            print("warning: Vector data too large, %i > 412 byte" % len(self.vectors))
+        # print (vectors, len(vectors))
+        if len(self.images) > 310:
+            print("warning: Image data too large, %i > 310 byte" % len(self.images))
+        # print (images, len(images))
+
+    def patch(self, path):
+        # load original kickstart
+        with open(path, "rb") as f:
+            self.data = bytearray(f.read())
+
+        # patch draw instructions:
+        for i in range(len(self.vectors)):
+            self.data[i+0x289d0] = self.vectors[i]
+        for i in range(len(self.images)):
+            self.data[i+0x28B6C] = self.images[i]
+
+        # patch palette
+        for i in range(len(self.out_pal)):
+            col = self.out_pal[i]
+            col = (col[0] >> 4) << 8 | (col[1] >> 4) << 4 | (col[2] >> 4)
+            # print ("%4.4x" % col)
+            struct.pack_into(">H", self.data, 0x2872A + i * 2, col)
+
+        # patch checksum (not really required for ROMs, but silences the checksum warning in UAE.)
+        struct.pack_into(">I", self.data, len(self.data) - 24, 0)
+        checksum = 0
+        for i in range(len(self.data)//4):
+            val, = struct.unpack_from(">I", self.data, i*4)
+            checksum += val
+            # checksum is calculated with carry, so if we overflow we wrap around and add the carry
+            if checksum > 0xFFFFFFFF:
+                checksum -= 0xFFFFFFFF
+        if checksum != 0xFFFFFFFF:
+            struct.pack_into(">I", self.data, len(self.data) - 24,  0xFFFFFFFF - checksum)
+
+    def save(self, path):
+        # write patched kickstart
+        with open(path, "wb") as f:
+            f.write(self.data)
 
 def main():
+    parser = argparse.ArgumentParser(description='Extract Amiga boot logo from Kickstart 1.3 ROM')
+    parser.add_argument('kick', type=str, help='Kickstart ROM image')
+    parser.add_argument('svg',  type=str, help='SVG file')
+    parser.add_argument('--out', type=str, help='patched ROM image')
+
+    args = parser.parse_args()
+
     convert = Convert()
-
-    inputPath = "logo.svg"
-    svg = ET.parse(inputPath).getroot()
-    for cmd in svg:
-        convert.render(cmd, (0,0))
-    im = convert.im.convert("P", colors=4, dither=Image.Dither.NONE)
-    im.save("logo_o.png")
-
-    pal = im.getpalette()
-    used_cols = [(pal[x*3+0],pal[x*3+1],pal[x*3+2]) for x in set(im.getdata())]
-    remap = {}
-    out_pal = []
-    bg_col = remap_col(remap, convert.im.getpixel((0,0)), used_cols, out_pal)
-    vectors = []
-    for op in convert.ops:
-        vectors.extend([op[0], remap_col(remap, op[1], used_cols, out_pal)])
-        vectors.extend(op[2:])
-    vectors.extend([255,255])
-
-    images=[]
-    images.extend([255,255])
-
-    if len(vectors) > 412:
-        print("warning: Vector data too large, %i > 412 byte" % len(vectors))
-    # print (vectors, len(vectors))
-    if len(images) > 310:
-        print("warning: Image data too large, %i > 310 byte" % len(images))
-    # print (images, len(images))
-
-    # load original kickstart
-    with open("Kickstart-v1.3-rev34.5-1987-Commodore-A500-A1000-A2000-CDTV.rom", "rb") as f:
-        data = bytearray(f.read())
-
-    # patch draw instructions:
-    for i in range(len(vectors)):
-        data[i+0x289d0] = vectors[i]
-    for i in range(len(images)):
-        data[i+0x28B6C] = images[i]
-
-    # patch palette
-    for i in range(len(out_pal)):
-        col = out_pal[i]
-        col = (col[0] >> 4) << 8 | (col[1] >> 4) << 4 | (col[2] >> 4)
-        # print ("%4.4x" % col)
-        struct.pack_into(">H", data, 0x2872A + i * 2, col)
-
-    # patch checksum
-    struct.pack_into(">I", data, len(data) - 24, 0)
-    checksum = 0
-    for i in range(len(data)//4):
-        val, = struct.unpack_from(">I", data, i*4)
-        checksum += val
-        # checksum is calculated with carry, so if we overflow we wrap around and add the carry
-        if checksum > 0xFFFFFFFF:
-            checksum -= 0xFFFFFFFF
-    if checksum != 0xFFFFFFFF:
-        struct.pack_into(">I", data, len(data) - 24,  0xFFFFFFFF - checksum)
-
-    # write patched kickstart
-    with open("kick-patch.bin", "wb") as f:
-        f.write(data)
+    convert.process(args.svg)
+    convert.patch(args.kick)
+    if args.out != None:
+        convert.save(args.out)
+    else:
+        convert.save("kick-patched.bin")
 
 if __name__ == "__main__":
     main()
