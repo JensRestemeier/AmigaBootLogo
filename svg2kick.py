@@ -1,7 +1,8 @@
-import base64, io, struct, math, argparse
-from re import S
+import io, struct, math, argparse
+import re
 from PIL import Image, ImageDraw
 import xml.etree.ElementTree as ET
+from urllib.request import urlopen
 
 # convert an SVG file into an Amiga Boot logo
 # This is by no means a proper SVG renderer/converter, it is just enough that you can edit the art in Inkscape and convert it back into the correct vector format.
@@ -60,6 +61,7 @@ class Convert:
         self.strokeColor = (0,0,0)
         self.fillColor = None
         self.ops = []
+        self.bitmaps = []
 
     def line(self, p):
         x1,y1,x2,y2 = p
@@ -148,29 +150,34 @@ class Convert:
 
     def render(self, cmd, ofs):
         if cmd.tag == "{http://www.w3.org/2000/svg}g":
+            backup_ofs = self.ofs
+            transform = cmd.get("transform", "")
+            # good enough:
+            m = re.match(".*translate.*\(([0-9]+),([0-9]+)\)", transform)
+            if m:
+                self.ofs = (self.ofs[0] + float(m.group(1)), self.ofs[1] + float(m.group(2)))
             for x in cmd:
                 self.render(x, ofs)
+            self.ofs = backup_ofs
         elif cmd.tag == "{http://www.w3.org/2000/svg}polygon":
             self.get_style(cmd)
             points = " ".join(cmd.get("points", "").split(",")).split(" ")
             p = []
             for i in range(len(points)//2):
-                p.append((int(points[i*2]), int(points[i*2+1])))
+                p.append(round_vec(float(points[i*2]), float(points[i*2+1])))
             self.poly(p + [p[0]])
         elif cmd.tag == "{http://www.w3.org/2000/svg}polyline":
             self.get_style(cmd)
             points = " ".join(cmd.get("points", "").split(",")).split(" ")
             p = []
             for i in range(len(points)//2):
-                p.append((int(points[i*2]), int(points[i*2+1])))
+                p.append(round_vec(float(points[i*2]), float(points[i*2+1])))
             self.poly(p)
         elif cmd.tag == "{http://www.w3.org/2000/svg}rect":
             self.get_style(cmd)
-            x = round(float(cmd.get("x", "0")))
-            y = round(float(cmd.get("y", "0")))
-            w = round(float(cmd.get("width", "0")))
-            h = round(float(cmd.get("height", "0")))
-            self.rect((x,y,w,h))
+            pos = round_vec((float(cmd.get("x","0")), float(cmd.get("y", "0"))))
+            size = round_vec((float(cmd.get("width","0")), float(cmd.get("height", "0"))))
+            self.rect(pos+size)
         elif cmd.tag == "{http://www.w3.org/2000/svg}path":
             self.get_style(cmd)
             d = " ".join(cmd.get("d", "").split(",")).split(" ")
@@ -241,17 +248,30 @@ class Convert:
                 self.poly(poly)
         elif cmd.tag == "{http://www.w3.org/2000/svg}circle":
             self.get_style(cmd)
-            cx = int(cmd.get("cx", 0))
-            cy = int(cmd.get("cy", 0))
+            pos = round_vec((float(cmd.get("cx", 0)), float(cmd.get("cy", 0))))
 
-            ImageDraw.floodfill(self.im, (cx,cy), self.fillColor)
+            ImageDraw.floodfill(self.im, pos, self.fillColor)
             draw = [0xFE, self.fillColor]
-            draw.extend(project((cx,cy)))
+            draw.extend(project(pos))
             self.ops.append(draw)
+        elif cmd.tag == "{http://www.w3.org/2000/svg}image":
+            pos = round_vec((float(cmd.get("x","0")), float(cmd.get("y", "0"))))
+            size = round_vec((float(cmd.get("width","0")), float(cmd.get("height", "0"))))
+            data_uri = cmd.get("{http://www.w3.org/1999/xlink}href", "")
+
+            if len(data_uri) > 0:
+                with urlopen(data_uri) as response:
+                    image_data = response.read()
+                image = Image.open(io.BytesIO(image_data))
+                if image.size != size:
+                    image = image.resize(size, Image.Resampling.NEAREST)
+                self.bitmaps.append((pos, image))
+
         else:
             print (cmd.tag)
 
     def process(self, path):
+        self.ofs = (0,0)
         svg = ET.parse(path).getroot()
         for cmd in svg:
             self.render(cmd, (0,0))
