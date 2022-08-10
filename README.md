@@ -12,7 +12,7 @@ This extracts the logo into either a PNG or an SVG file. The PNG file is just ex
 While I could convert fill instructions from the ROM into filled polygons in the SVG I decided to just put a sphere at each flood fill seed.
 
 ```shell
-python svg2kick.py -k <kickstart> -s <svg> -o <output>
+python svg2kick.py svg2kick.py [-h] [--out kick-patched.bin] kickstart.bin logo.svg
 ```
 This extracts draw commands from the svg. Only a limited number of primitives are supported, and only fill and outline colours are used. There are 412 byte available for vector draw instructions and 310 byte for bitmaps. I am not sure if you could relocate the data into a larger unused section.
 
