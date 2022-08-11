@@ -333,7 +333,7 @@ class Convert:
             f.write(self.data)
 
 def main():
-    parser = argparse.ArgumentParser(description='Extract Amiga boot logo from Kickstart 1.3 ROM')
+    parser = argparse.ArgumentParser(description='Patch a new Amiga boot logo into the Kickstart 1.3 ROM')
     parser.add_argument('kick', type=str, help='Kickstart ROM image')
     parser.add_argument('svg',  type=str, help='SVG file')
     parser.add_argument('--out', type=str, help='patched ROM image')

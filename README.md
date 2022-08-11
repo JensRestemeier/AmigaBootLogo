@@ -9,7 +9,7 @@ python kick2svg.py [-h] [--png output.png] [--svg output.svg] kickstart.bin
 ```
 This extracts the logo into either a PNG or an SVG file. The PNG file is just executing the draw commands with [Pillow](https://pillow.readthedocs.io/) so fill rules may be different from the ones in the built-in graphics library. The SVG is a list of draw commands that can be viewed in various web browsers or [Inkscape](https://inkscape.org/).
 
-While I could convert fill instructions from the ROM into filled polygons in the SVG I decided to just put a sphere at each flood fill seed.
+While I could convert flood fill instructions from the ROM into filled polygons in the SVG I decided to just put a dot at each flood fill seed.
 
 ```shell
 python svg2kick.py svg2kick.py [-h] [--out kick-patched.bin] kickstart.bin logo.svg
