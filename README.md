@@ -1,5 +1,7 @@
 # AmigaBootLogo
 
+So far untested as my A500 boots to a black screen - worked in UAE when I tried it.
+
 This is a set of utilities to extract and insert the Amiga "workbench floppy" image from a Kickstart 1.3 ROM image. This was inspired by the answer in [StackExchange](https://retrocomputing.stackexchange.com/questions/13897/why-was-the-kickstart-1-x-insert-floppy-graphic-so-bad/13901) that describes the vector format. I spent a bit of time in [Ghidra](https://ghidra-sre.org/) to decode the format for images.
 
 The scripts require [Pillow](https://pillow.readthedocs.io/) to be installed.
